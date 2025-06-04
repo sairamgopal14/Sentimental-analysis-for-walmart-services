@@ -1,0 +1,148 @@
+import pandas as pd
+import numpy as np
+import re
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, confusion_matrix
+from sklearn.impute import SimpleImputer
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Download necessary NLTK data
+import nltk
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+# Load the dataset
+data = pd.read_csv('given_file.csv')
+
+# Display basic information about the dataset
+print(data.info())
+
+# Handle missing values
+# For simplicity, let's assume 'review_text' and 'sentiment' are key columns
+# If 'review_text' has nulls, we might drop those rows since text is crucial for analysis
+data = data.dropna(subset=['review_text'])
+
+# For 'sentiment', if it's categorical, we might fill with the mode
+if data['sentiment'].dtype == 'object':
+    imputer = SimpleImputer(strategy='most_frequent')
+    data['sentiment'] = imputer.fit_transform(data[['sentiment']]).ravel()
+
+# Data Preprocessing
+def preprocess_text(text):
+    # Convert to lowercase
+    text = str(text).lower()
+    # Remove HTML tags
+    text = re.sub('<.*?>', '', text)
+    # Remove emojis
+    text = re.sub(r'[^\x00-\x7F]+', '', text)
+    # Tokenize
+    tokens = word_tokenize(text)
+    # Remove stopwords
+    stop_words = set(stopwords.words('english'))
+    tokens = [token for token in tokens if token not in stop_words]
+    # Lemmatize
+    lemmatizer = WordNetLemmatizer()
+    tokens = [lemmatizer.lemmatize(token) for token in tokens]
+    return ' '.join(tokens)
+
+# Apply preprocessing
+data['preprocessed_text'] = data['review_text'].apply(preprocess_text)
+
+# Feature Engineering
+# TF-IDF
+tfidf = TfidfVectorizer(max_features=5000)
+tfidf_features = tfidf.fit_transform(data['preprocessed_text'])
+
+# Prepare data for LSTM
+max_words = 10000  # Vocabulary size
+max_len = 100  # Maximum length of review
+
+tokenizer = Tokenizer(num_words=max_words)
+tokenizer.fit_on_texts(data['preprocessed_text'])
+sequences = tokenizer.texts_to_sequences(data['preprocessed_text'])
+
+word_index = tokenizer.word_index
+print('Found %s unique tokens.' % len(word_index))
+
+data_pad = pad_sequences(sequences, maxlen=max_len)
+
+# Model Development
+# Split the data
+X_train, X_test, y_train, y_test = train_test_split(tfidf_features, data['sentiment'], test_size=0.2, random_state=42)
+
+# SVM
+svm_model = SVC(kernel='linear')
+svm_model.fit(X_train, y_train)
+
+# Random Forest
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_model.fit(X_train, y_train)
+
+# LSTM
+model = Sequential()
+model.add(Embedding(max_words, 128, input_length=max_len))
+model.add(LSTM(128, dropout=0.2, recurrent_dropout=0.2))
+model.add(Dense(1, activation='sigmoid'))
+model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+# Convert sentiment to binary for binary classification with LSTM
+y_train_binary = (y_train == 'positive').astype(int)
+y_test_binary = (y_test == 'positive').astype(int)
+
+# Fit the model
+model.fit(data_pad[:len(X_train)], y_train_binary, validation_split=0.2, epochs=5, batch_size=32)
+
+# Evaluation
+# For SVM
+y_pred_svm = svm_model.predict(X_test)
+print("SVM Results:")
+print(f"Precision: {precision_score(y_test, y_pred_svm, average='weighted')}")
+print(f"Recall: {recall_score(y_test, y_pred_svm, average='weighted')}")
+print(f"F1-Score: {f1_score(y_test, y_pred_svm, average='weighted')}")
+print(f"Accuracy: {accuracy_score(y_test, y_pred_svm)}")
+
+# For Random Forest
+y_pred_rf = rf_model.predict(X_test)
+print("\nRandom Forest Results:")
+print(f"Precision: {precision_score(y_test, y_pred_rf, average='weighted')}")
+print(f"Recall: {recall_score(y_test, y_pred_rf, average='weighted')}")
+print(f"F1-Score: {f1_score(y_test, y_pred_rf, average='weighted')}")
+print(f"Accuracy: {accuracy_score(y_test, y_pred_rf)}")
+
+# For LSTM
+y_pred_lstm = (model.predict(data_pad[len(X_train):]) > 0.5).astype(int).flatten()
+print("\nLSTM Results:")
+print(f"Precision: {precision_score(y_test_binary, y_pred_lstm, average='binary')}")
+print(f"Recall: {recall_score(y_test_binary, y_pred_lstm, average='binary')}")
+print(f"F1-Score: {f1_score(y_test_binary, y_pred_lstm, average='binary')}")
+print(f"Accuracy: {accuracy_score(y_test_binary, y_pred_lstm)}")
+
+# Visualization
+# Sentiment Distribution
+plt.figure(figsize=(10, 6))
+sns.countplot(x='sentiment', data=data)
+plt.title('Sentiment Distribution')
+plt.show()
+
+# Confusion Matrix for SVM
+cm = confusion_matrix(y_test, y_pred_svm)
+plt.figure(figsize=(10, 6))
+sns.heatmap(cm, annot=True, fmt='d')
+plt.title('Confusion Matrix for SVM')
+plt.ylabel('True label')
+plt.xlabel('Predicted label')
+plt.show()
+
+# You might want to add more visualizations based on your project needs or the results of your analysis.
